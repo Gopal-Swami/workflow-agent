@@ -1,0 +1,31 @@
+# Temporal Dynamic Configuration
+# These settings are for development only
+
+# Frontend settings
+frontend.enableClientVersionCheck:
+  - value: true
+    constraints: {}
+
+# History settings
+history.persistenceMaxQPS:
+  - value: 3000
+    constraints: {}
+
+# Matching settings
+matching.numTaskqueueReadPartitions:
+  - value: 5
+    constraints: {}
+
+matching.numTaskqueueWritePartitions:
+  - value: 5
+    constraints: {}
+
+# Worker settings
+worker.enableScheduler:
+  - value: true
+    constraints: {}
+
+# System settings
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}

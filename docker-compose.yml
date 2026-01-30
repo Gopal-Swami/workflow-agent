@@ -1,0 +1,120 @@
+# Workflow Agent - Full Stack Docker Compose Configuration
+#
+# This sets up the complete system: Temporal server, worker, and web frontend.
+#
+# Usage:
+#   cp .env.example .env     # Create environment file (first time only)
+#   docker-compose up -d     # Start all services in background
+#   docker-compose down      # Stop and remove containers
+#   docker-compose logs -f   # View logs for all services
+#   docker-compose build     # Rebuild images after code changes
+
+services:
+  # PostgreSQL database for Temporal
+  postgresql:
+    image: postgres:15
+    container_name: temporal-postgresql
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-temporal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-temporal}
+      POSTGRES_DB: ${POSTGRES_DB:-temporal}
+    volumes:
+      - temporal-postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-temporal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - workflow-network
+
+  # Temporal Server
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    container_name: temporal-server
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-temporal}
+      - POSTGRES_PWD=${POSTGRES_PASSWORD:-temporal}
+      - POSTGRES_SEEDS=postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"  # gRPC port for external clients (optional, for debugging)
+    volumes:
+      - ./temporal-config:/etc/temporal/config/dynamicconfig
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - workflow-network
+
+  # Temporal Web UI
+  temporal-ui:
+    image: temporalio/ui:2.26.2
+    container_name: temporal-ui
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=${TEMPORAL_CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${TEMPORAL_UI_PORT:-8080}:8080"
+    networks:
+      - workflow-network
+
+  # Temporal Worker - Executes workflows and activities
+  worker:
+    build:
+      context: .
+      dockerfile: packages/temporal-worker/Dockerfile
+    container_name: workflow-worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-agent-tasks}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - MAX_CONCURRENT_ACTIVITIES=${WORKER_MAX_CONCURRENT_ACTIVITIES:-10}
+      - MAX_CONCURRENT_WORKFLOWS=${WORKER_MAX_CONCURRENT_WORKFLOWS:-10}
+    restart: unless-stopped
+    networks:
+      - workflow-network
+
+  # Next.js Web Frontend
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    container_name: workflow-web
+    depends_on:
+      temporal:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-agent-tasks}
+      - PORT=${WEB_PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+    networks:
+      - workflow-network
+
+networks:
+  workflow-network:
+    driver: bridge
+
+volumes:
+  temporal-postgresql-data:
